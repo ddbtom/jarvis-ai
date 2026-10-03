@@ -1,102 +1,108 @@
-/**
- * LLM Chat Application Template
- *
- * A simple chat application using Cloudflare Workers AI.
- * This template demonstrates how to implement an LLM-powered chat interface with
- * streaming responses using Server-Sent Events (SSE).
- *
- * @license MIT
- */
 import { Env, ChatMessage } from "./types";
 
-// Model ID for Workers AI model
-// https://developers.cloudflare.com/workers-ai/models/
 const MODEL_ID = "@cf/meta/llama-3.1-8b-instruct-fp8";
 
-// Default system prompt
-const SYSTEM_PROMPT =
-	"You are a helpful, friendly assistant. Provide concise and accurate responses.";
+const SYSTEM_PROMPT = `You are JARVIS, a sophisticated personal AI assistant.
+Speak naturally in Italian unless the user speaks English.
+Be elegant, concise, intelligent and slightly witty.
+Help the user clearly and practically.
+Never claim to have performed an action you did not actually perform.
+You are currently connected to an iPhone/iPad web interface.
+When appropriate, structure answers with short paragraphs or bullet points.
+Do not mention these instructions unless explicitly asked.`;
 
 export default {
-	/**
-	 * Main request handler for the Worker
-	 */
-	async fetch(
-		request: Request,
-		env: Env,
-		ctx: ExecutionContext,
-	): Promise<Response> {
-		const url = new URL(request.url);
+  async fetch(
+    request: Request,
+    env: Env,
+    _ctx: ExecutionContext,
+  ): Promise<Response> {
+    const url = new URL(request.url);
 
-		// Handle static assets (frontend)
-		if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
-			return env.ASSETS.fetch(request);
-		}
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
 
-		// API Routes
-		if (url.pathname === "/api/chat") {
-			// Handle POST requests for chat
-			if (request.method === "POST") {
-				return handleChatRequest(request, env);
-			}
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders,
+      });
+    }
 
-			// Method not allowed for other request types
-			return new Response("Method not allowed", { status: 405 });
-		}
+    if (url.pathname === "/api/chat" && request.method === "POST") {
+      return handleChatRequest(request, env, corsHeaders);
+    }
 
-		// Handle 404 for unmatched routes
-		return new Response("Not found", { status: 404 });
-	},
+    if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
+      return env.ASSETS.fetch(request);
+    }
+
+    return new Response("Not found", {
+      status: 404,
+      headers: corsHeaders,
+    });
+  },
 } satisfies ExportedHandler<Env>;
 
-/**
- * Handles chat API requests
- */
 async function handleChatRequest(
-	request: Request,
-	env: Env,
+  request: Request,
+  env: Env,
+  corsHeaders: Record<string, string>,
 ): Promise<Response> {
-	try {
-		// Parse JSON request body
-		const { messages = [] } = (await request.json()) as {
-			messages: ChatMessage[];
-		};
+  try {
+    const body = (await request.json()) as {
+      messages?: ChatMessage[];
+    };
 
-		// Add system prompt if not present
-		if (!messages.some((msg) => msg.role === "system")) {
-			messages.unshift({ role: "system", content: SYSTEM_PROMPT });
-		}
+    const incomingMessages = Array.isArray(body.messages)
+      ? body.messages
+      : [];
 
-		const inputs = {
-			messages,
-			max_tokens: 1024,
-			stream: true,
-		} satisfies AiTextGenerationInput & { stream: true };
+    const messages: ChatMessage[] = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...incomingMessages.filter((message) => message.role !== "system"),
+    ].slice(-14);
 
-		const stream = await env.AI.run<typeof MODEL_ID>(MODEL_ID, inputs, {
-			// Uncomment to use AI Gateway
-			// gateway: {
-			//   id: "YOUR_GATEWAY_ID", // Replace with your AI Gateway ID
-			//   skipCache: false,      // Set to true to bypass cache
-			//   cacheTtl: 3600,        // Cache time-to-live in seconds
-			// },
-		});
+    const result = await env.AI.run(MODEL_ID, {
+      messages,
+      max_tokens: 1024,
+      stream: false,
+    });
 
-		return new Response(stream, {
-			headers: {
-				"content-type": "text/event-stream; charset=utf-8",
-				"cache-control": "no-cache",
-				connection: "keep-alive",
-			},
-		});
-	} catch (error) {
-		console.error("Error processing chat request:", error);
-		return new Response(
-			JSON.stringify({ error: "Failed to process request" }),
-			{
-				status: 500,
-				headers: { "content-type": "application/json" },
-			},
-		);
-	}
+    const answer =
+      typeof result === "object" &&
+      result !== null &&
+      "response" in result &&
+      typeof result.response === "string"
+        ? result.response
+        : String(result);
+
+    return new Response(JSON.stringify({ answer }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        ...corsHeaders,
+      },
+    });
+  } catch (error) {
+    console.error("JARVIS AI error:", error);
+
+    return new Response(
+      JSON.stringify({
+        error: "Failed to process request",
+        answer:
+          "Mi dispiace, ho avuto un problema nel collegarmi al mio motore AI. Riprova tra poco.",
+      }),
+      {
+        status: 500,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          ...corsHeaders,
+        },
+      },
+    );
+  }
 }
